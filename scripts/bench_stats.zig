@@ -53,9 +53,7 @@ pub fn main() !void {
     }
 
     if (values.items.len == 0) {
-        var stdout_writer = std.fs.File.stdout().writer(&.{});
-        const stdout = &stdout_writer.interface;
-        try stdout.writeAll("No numeric samples found.\n");
+        try writeToStreamAllowBrokenPipe(std.fs.File.stdout(), "No numeric samples found.\n");
         std.process.exit(1);
     }
 
@@ -68,18 +66,22 @@ pub fn main() !void {
     const median = computeMedian(values.items);
     const stdev = computePopulationStdDev(values.items, mean);
 
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
-    const stdout = &stdout_writer.interface;
-    try stdout.print("count  : {d}\n", .{count});
-    try printMetric(allocator, stdout, "min", values.items[0], cfg.unit);
-    try printMetric(allocator, stdout, "p50", percentile(values.items, 50.0), cfg.unit);
-    try printMetric(allocator, stdout, "p90", percentile(values.items, 90.0), cfg.unit);
-    try printMetric(allocator, stdout, "p95", percentile(values.items, 95.0), cfg.unit);
-    try printMetric(allocator, stdout, "p99", percentile(values.items, 99.0), cfg.unit);
-    try printMetric(allocator, stdout, "max", values.items[count - 1], cfg.unit);
-    try printMetric(allocator, stdout, "mean", mean, cfg.unit);
-    try printMetric(allocator, stdout, "median", median, cfg.unit);
-    try printMetric(allocator, stdout, "stdev", stdev, cfg.unit);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    const writer = output.writer(allocator);
+
+    try writer.print("count  : {d}\n", .{count});
+    try printMetric(allocator, writer, "min", values.items[0], cfg.unit);
+    try printMetric(allocator, writer, "p50", percentile(values.items, 50.0), cfg.unit);
+    try printMetric(allocator, writer, "p90", percentile(values.items, 90.0), cfg.unit);
+    try printMetric(allocator, writer, "p95", percentile(values.items, 95.0), cfg.unit);
+    try printMetric(allocator, writer, "p99", percentile(values.items, 99.0), cfg.unit);
+    try printMetric(allocator, writer, "max", values.items[count - 1], cfg.unit);
+    try printMetric(allocator, writer, "mean", mean, cfg.unit);
+    try printMetric(allocator, writer, "median", median, cfg.unit);
+    try printMetric(allocator, writer, "stdev", stdev, cfg.unit);
+
+    try writeToStreamAllowBrokenPipe(std.fs.File.stdout(), output.items);
 }
 
 fn parseArgs(argv: []const []const u8) !Config {
@@ -88,9 +90,7 @@ fn parseArgs(argv: []const []const u8) !Config {
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            var stderr_writer = std.fs.File.stderr().writer(&.{});
-            const stderr = &stderr_writer.interface;
-            try stderr.print("{s}\n", .{UsageText});
+            try writeToStreamAllowBrokenPipe(std.fs.File.stderr(), UsageText ++ "\n");
             std.process.exit(0);
         }
         if (std.mem.eql(u8, arg, "--input")) {
@@ -207,10 +207,23 @@ fn formatValue(allocator: std.mem.Allocator, value: f64, unit: []const u8) ![]u8
     return std.fmt.allocPrint(allocator, "{d:.6} {s}", .{ value, unit });
 }
 
-fn printMetric(allocator: std.mem.Allocator, writer: anytype, name: []const u8, value: f64, unit: []const u8) !void {
+fn printMetric(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    name: []const u8,
+    value: f64,
+    unit: []const u8,
+) !void {
     const rendered = try formatValue(allocator, value, unit);
     defer allocator.free(rendered);
     try writer.print("{s:<7}: {s}\n", .{ name, rendered });
+}
+
+fn writeToStreamAllowBrokenPipe(file: std.fs.File, bytes: []const u8) !void {
+    file.writeAll(bytes) catch |err| switch (err) {
+        error.BrokenPipe => return,
+        else => return err,
+    };
 }
 
 test "percentile interpolation" {

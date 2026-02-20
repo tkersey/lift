@@ -112,9 +112,9 @@ pub fn main() !void {
         .sub_path = cfg.output,
         .data = out.items,
     });
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
-    const stdout = &stdout_writer.interface;
-    try stdout.print("Wrote {s}\n", .{cfg.output});
+    const success_message = try std.fmt.allocPrint(allocator, "Wrote {s}\n", .{cfg.output});
+    defer allocator.free(success_message);
+    try writeToStreamAllowBrokenPipe(std.fs.File.stdout(), success_message);
 }
 
 fn parseArgs(argv: []const []const u8) !Config {
@@ -124,9 +124,7 @@ fn parseArgs(argv: []const []const u8) !Config {
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            var stderr_writer = std.fs.File.stderr().writer(&.{});
-            const stderr = &stderr_writer.interface;
-            try stderr.print("{s}\n", .{UsageText});
+            try writeToStreamAllowBrokenPipe(std.fs.File.stderr(), UsageText ++ "\n");
             std.process.exit(0);
         }
         if (std.mem.eql(u8, arg, "--title")) {
@@ -191,6 +189,13 @@ fn civilFromDays(days_since_unix_epoch: i64) Date {
         .year = y,
         .month = m,
         .day = d,
+    };
+}
+
+fn writeToStreamAllowBrokenPipe(file: std.fs.File, bytes: []const u8) !void {
+    file.writeAll(bytes) catch |err| switch (err) {
+        error.BrokenPipe => return,
+        else => return err,
     };
 }
 
